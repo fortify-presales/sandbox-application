@@ -29,3 +29,8 @@ test/e2e/videos/
 
 # ignore Snyk Code scanner files
 .dccache
+
+# Fortify files
+.fortify
+fortify.config
+*.fpr

@@ -1,0 +1,198 @@
+# yaml-language-server: $schema=https://fortify.github.io/fcli/schemas/action/fcli-action-schema-2.7.0.json
+
+author: SonatypeFortifyIntegration
+
+usage:
+  header: Download, enrich and import Sonatype CycloneDX SBOM to FoD
+  description: |
+    Downloads a CycloneDX SBOM from Sonatype IQ using the stage-based endpoint,
+    optionally enriches each vulnerability in-place with remediation recommendations
+    and CVE detail from Sonatype IQ REST APIs, writes the (enriched) SBOM to a local
+    file, and imports it into Fortify on Demand via fcli.
+
+    Expected flow:
+    1) GET /api/v2/applications?publicId=<id>
+    2) GET /api/v2/cycloneDx/<version>/{applicationInternalId}/stages/{stageId}
+    3) [if --enrich=true] For each affected component purl:
+         POST /api/v2/components/remediation/application/{id}?stageId=<stage>
+    4) [if --enrich=true] For each CVE vulnerability id:
+         GET /api/v2/vulnerabilities/{cveId}
+    5) fcli fod oss-scan import --rel=<release> -f=<sbom-file>
+
+config:
+  rest.target.default: sonatype
+
+formatters:
+  # Constructs a fresh analysis object so analysis.detail can be set even when
+  # the original vulnerability has no analysis block.
+  analysisWithDetail:
+    state: "${vuln.analysis!=null && vuln.analysis.state!=null ? #fmt('%s',vuln.analysis.state) : null}"
+    justification: "${vuln.analysis!=null && vuln.analysis.justification!=null ? #fmt('%s',vuln.analysis.justification) : null}"
+    detail: "${abstractText}"
+  propAbstract:
+    name: "sonatype.enrichment.abstract"
+    value: "${abstractText}"
+  propRemediation:
+    name: "sonatype.enrichment.remediationText"
+    value: "${recText}"
+
+cli.options:
+  sonatype-url:
+    names: --sonatype-url
+    description: Sonatype IQ base URL, for example https://iq.example.com
+    required: true
+  sonatype-public-id:
+    names: --sonatype-public-id
+    description: Sonatype application public ID
+    required: true
+  sonatype-stage:
+    names: --sonatype-stage
+    description: Sonatype stage name
+    required: false
+    default: build
+  sonatype-auth-header:
+    names: --sonatype-auth-header
+    description: HTTP Authorization header value for Sonatype IQ (for example Basic <base64(username:password)>)
+    required: true
+    mask:
+      sensitivity: high
+  sonatype-cyclonedx-version:
+    names: --sonatype-cyclonedx-version
+    description: CycloneDX endpoint version segment used in Sonatype download path (for example 1.6 or 1.4)
+    required: false
+    default: 1.6
+  enrich:
+    names: --enrich
+    description: Enrich vulnerabilities with Sonatype remediation recommendations and CVE details
+    type: boolean
+    required: false
+    default: true
+  fod-release:
+    names: --fod-release
+    description: FoD release identifier for --rel (id or app[:microservice]:release)
+    required: true
+  sbom-file:
+    names: --sbom-file, -f
+    description: Output CycloneDX file path
+    required: false
+    default: sonatype-sbom.cdx.json
+  fod-session:
+    names: --fod-session
+    description: FoD session name to use for import command
+    required: false
+    default: default
+
+steps:
+  - rest.target:
+      sonatype:
+        baseUrl: "${#replaceAllFromRegExMap(cli['sonatype-url'], {'/+$':''})}"
+        headers:
+          Accept: application/json
+          Authorization: "${cli['sonatype-auth-header']}"
+
+  # Step 1: Resolve internal application ID from public ID
+  - rest.call:
+      appLookup:
+        uri: /api/v2/applications
+        query:
+          publicId: "${cli['sonatype-public-id']}"
+        on.success:
+          - var.set:
+              appInternalId: "${appLookup.applications!=null && appLookup.applications.size()>0 ? appLookup.applications[0].id : null}"
+
+  # Step 2: Download CycloneDX SBOM for stage
+  - rest.call:
+      sbom:
+        uri: "/api/v2/cycloneDx/${cli['sonatype-cyclonedx-version']}/${appInternalId}/stages/${cli['sonatype-stage']}"
+
+  # Step 3: Build bom-ref → purl lookup from component list (used for remediation calls)
+  - if: "${cli['enrich']}"
+    records.for-each:
+      from: "${sbom_raw.components}"
+      record.var-name: comp
+      do:
+        - if: "${comp.purl != null}"
+          var.set:
+            "refPurl.${comp['bom-ref']}": "${comp.purl}"
+
+  # Step 4: Enrich each vulnerability in-place with remediation + CVE detail
+  - if: "${cli['enrich']}"
+    records.for-each:
+      from: "${sbom_raw.vulnerabilities}"
+      record.var-name: vuln
+      do:
+        # Reset per-iteration enrichment state
+        - var.set:
+            recText: null
+            abstractText: null
+            affectedPurl: "${vuln.affects!=null && vuln.affects.size()>0 && refPurl!=null && refPurl[vuln.affects[0].ref]!=null ? refPurl[vuln.affects[0].ref] : null}"
+
+        # POST remediation API for the first affected component purl
+        - if: "${affectedPurl != null}"
+          rest.call:
+            remCall:
+              method: POST
+              uri: "/api/v2/components/remediation/application/${appInternalId}"
+              query:
+                stageId: "${cli['sonatype-stage']}"
+              body: '{"packageUrl":"${affectedPurl}"}'
+              on.success:
+                - var.set:
+                    recVersion: "${remCall.remediation!=null ? (remCall.remediation.versionChanges.?[type=='next-non-failing'].size()>0 ? #substringBefore(#substringAfter(remCall.remediation.versionChanges.?[type=='next-non-failing'][0].data.component.packageUrl,'@'),'?') : (remCall.remediation.versionChanges.?[type=='next-no-violations'].size()>0 ? #substringBefore(#substringAfter(remCall.remediation.versionChanges.?[type=='next-no-violations'][0].data.component.packageUrl,'@'),'?') : null)) : null}"
+                    recText: "${recVersion!=null ? 'Upgrade to version '+recVersion : null}"
+              on.fail:
+                - log.warn: "Remediation lookup skipped for ${affectedPurl}: ${lastException.message}"
+
+        # GET CVE vulnerability details (only for CVE-YYYY-NNNNN identifiers)
+        - if: "${vuln.id!=null && vuln.id.toUpperCase().startsWith('CVE-')}"
+          rest.call:
+            vulnDetail:
+              uri: "/api/v2/vulnerabilities/${vuln.id}"
+              on.success:
+                - var.set:
+                    vDesc: "${#ifBlank(#fmt('%s',vulnDetail.description),'N/A')}"
+                    vExpl: "${#ifBlank(#fmt('%s',vulnDetail.explanationMarkdown),'N/A')}"
+                    vDet:  "${#ifBlank(#fmt('%s',vulnDetail.detectionMarkdown),'N/A')}"
+                    vRec:  "${#ifBlank(#fmt('%s',vulnDetail.recommendationMarkdown),'N/A')}"
+                    vVec:  "${vulnDetail.mainSeverity!=null ? #ifBlank(#fmt('%s',vulnDetail.mainSeverity.vector),'N/A') : 'N/A'}"
+                    abstractText: "${vDesc+'<br /><strong>Explanation: </strong>'+vExpl+'<br /><strong>Detection: </strong>'+vDet+'<br /><strong>Recommendation: </strong>'+(recText!=null?recText:vRec)+'<br /><strong>Threat Vectors: </strong>'+vVec}"
+              on.fail:
+                - log.warn: "CVE detail lookup skipped for ${vuln.id}: ${lastException.message}"
+
+        # Set recommendation field on vulnerability
+        - if: "${recText != null}"
+          var.set:
+            vuln.recommendation: "${recText}"
+
+        # Replace (or create) the analysis object so analysis.detail is set
+        - if: "${abstractText != null}"
+          var.set:
+            vuln.analysis:
+              fmt: analysisWithDetail
+
+        # Append enrichment properties to vulnerability
+        - if: "${abstractText != null}"
+          var.set:
+            vuln.properties..:
+              fmt: propAbstract
+
+        - if: "${recText != null}"
+          var.set:
+            vuln.properties..:
+              fmt: propRemediation
+
+  # Step 5: Write SBOM file (in-place mutations are reflected in sbom_raw)
+  - out.write:
+      "${cli['sbom-file']}": "${#fmt('%s', sbom_raw)}"
+
+  - log.info: Wrote CycloneDX SBOM to ${cli['sbom-file']} for stage ${cli['sonatype-stage']}
+
+  # Step 6: Resolve FoD release ID and import
+  - var.set:
+      fodReleaseId: "${#fod.release(cli['fod-release']).releaseId}"
+
+  - run.fcli:
+      importSbom:
+        cmd: "fod oss-scan import --rel=${fodReleaseId} -f=\"${cli['sbom-file']}\" --fod-session=\"${cli['fod-session']}\""
+
+  - log.info: Imported SBOM ${cli['sbom-file']} into FoD release ${cli['fod-release']}
