@@ -332,7 +332,7 @@ steps:
         # even if the vulnerability detail lookup fails.
         - if: "${buildReportUrl!=null && buildReportUrl.startsWith('http')}"
           var.set:
-            vuln.references:
+            vuln.references..:
               fmt: refFromBuildReport
 
         # Set recommendation field on vulnerability
