@@ -21,13 +21,13 @@ permissions:
 
 on:
   push:
-    branches: [ master, feature/**, bugfix/** ]
+    branches: [ main, feature/**, bugfix/** ]
     paths:
       - '**'
       - '!.github/**'
       - '.github/workflows/fod.yml'
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
     paths:
       - '**'
       - '!.github/**'

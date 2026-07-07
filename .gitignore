@@ -34,3 +34,7 @@ test/e2e/videos/
 .fortify
 fortify.config
 *.fpr
+fortifypackage.zip
+*.json
+sandbox-application.zip
+run.bat
