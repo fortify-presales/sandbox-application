@@ -48,6 +48,11 @@ formatters:
     source:
       name: "${vulnDetail.source!=null && vulnDetail.source.longName!=null ? vulnDetail.source.longName : 'Vulnerability Link'}"
       url: "${vulnDetail.vulnerabilityLink}"
+  refFromBuildReport:
+    id: "${vuln.id}"
+    source:
+      name: "Sonatype Build Report"
+      url: "${buildReportUrl}"
   ratingFromMainSeverity:
     source:
       name: "${vulnDetail.mainSeverity.sourceLabel!=null ? vulnDetail.mainSeverity.sourceLabel : vulnDetail.mainSeverity.source}"
@@ -155,6 +160,10 @@ steps:
   - if: "${cli['enrich'] && sbom_raw.dependencies!=null}"
     var.set:
       rootRef: "${sbom_raw.metadata!=null && sbom_raw.metadata.component!=null ? sbom_raw.metadata.component['bom-ref'] : null}"
+
+  # Capture Sonatype build report URL from BOM-level external references (if available)
+  - var.set:
+      buildReportUrl: "${sbom_raw.externalReferences!=null && sbom_raw.externalReferences.?[type=='bom'].size()>0 ? sbom_raw.externalReferences.?[type=='bom'][0].url : null}"
 
   - if: "${cli['enrich'] && sbom_raw.dependencies!=null}"
     records.for-each:
@@ -279,6 +288,12 @@ steps:
                   var.set:
                     vuln.references..:
                       fmt: refFromVulnLink
+
+                # Append Sonatype build report URL so FoD issue references can link back to the scan report
+                - if: "${buildReportUrl!=null && (vuln.references==null || vuln.references.?[source!=null && source.url==buildReportUrl].size()==0)}"
+                  var.set:
+                    vuln.references..:
+                      fmt: refFromBuildReport
 
                 # Backfill ratings from mainSeverity when missing in source SBOM
                 - if: "${(vuln.ratings==null || vuln.ratings.size()==0) && vulnDetail.mainSeverity!=null}"
