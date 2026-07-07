@@ -163,7 +163,7 @@ steps:
 
   # Capture Sonatype build report URL from BOM-level external references (if available)
   - var.set:
-      buildReportUrl: "${sbom_raw.externalReferences!=null && sbom_raw.externalReferences.?[type=='bom'].size()>0 ? sbom_raw.externalReferences.?[type=='bom'][0].url : null}"
+      buildReportUrl: "${sbom_raw.externalReferences!=null ? #replaceAllFromRegExMap(#fmt('%s',sbom_raw.externalReferences), {'.*\"url\"\\s*:\\s*\"([^\"]+)\".*':'$1'}) : null}"
 
   - if: "${cli['enrich'] && sbom_raw.dependencies!=null}"
     records.for-each:
@@ -289,12 +289,6 @@ steps:
                     vuln.references..:
                       fmt: refFromVulnLink
 
-                # Append Sonatype build report URL so FoD issue references can link back to the scan report
-                - if: "${buildReportUrl!=null && (vuln.references==null || vuln.references.?[source!=null && source.url==buildReportUrl].size()==0)}"
-                  var.set:
-                    vuln.references..:
-                      fmt: refFromBuildReport
-
                 # Backfill ratings from mainSeverity when missing in source SBOM
                 - if: "${(vuln.ratings==null || vuln.ratings.size()==0) && vulnDetail.mainSeverity!=null}"
                   var.set:
@@ -333,6 +327,13 @@ steps:
                       fmt: propDetectionType
               on.fail:
                 - log.warn: "CVE detail lookup skipped for ${vuln.id}: ${lastException.message}"
+
+        # Always append Sonatype build report URL so FoD issue references can link back to the scan report,
+        # even if the vulnerability detail lookup fails.
+        - if: "${buildReportUrl!=null && buildReportUrl.startsWith('http')}"
+          var.set:
+            vuln.references:
+              fmt: refFromBuildReport
 
         # Set recommendation field on vulnerability
         - if: "${recText != null}"
