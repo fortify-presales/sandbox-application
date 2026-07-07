@@ -109,3 +109,12 @@ jobs:
             --sonatype-password="${LIFECYCLE_PASSWORD}" --sonatype-app-id="${LIFECYCLE_APP_ID}" \
             --sonatype-stage="build" --sonatype-cyclonedx-version="1.4" \
             --fod-release="${FOD_RELEASE}" --sbom-file="sonatype-sbom.cdx.json" --fod-session="default"
+
+      - name: Upload Sonatype SBOM artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonatype-sbom-cdx
+          path: sonatype-sbom.cdx.json
+          if-no-files-found: warn
+          retention-days: 14
