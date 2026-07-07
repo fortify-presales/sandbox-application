@@ -68,7 +68,7 @@ jobs:
         uses: sonatype/actions/evaluate@v1
         with:
           iq-server-url: ${{ vars.LIFECYCLE_SERVER_URL }}
-          username: ${{ secrets.LIFECYCLE_USERNAME }}
+          username: ${{ vars.LIFECYCLE_USERNAME }}
           password: ${{ secrets.LIFECYCLE_PASSWORD }}
           application-id: ${{ env.LIFECYCLE_APP_ID }}
           scan-targets: package.json package-lock.json
@@ -84,7 +84,7 @@ jobs:
           FOD_CLIENT_ID: ${{ secrets.FOD_CLIENT_ID }}
           FOD_CLIENT_SECRET: ${{ secrets.FOD_CLIENT_SECRET }}
           LIFECYCLE_SERVER_URL: ${{ vars.LIFECYCLE_SERVER_URL }}
-          LIFECYCLE_USERNAME: ${{ secrets.LIFECYCLE_USERNAME }}
+          LIFECYCLE_USERNAME: ${{ vars.LIFECYCLE_USERNAME }}
           LIFECYCLE_PASSWORD: ${{ secrets.LIFECYCLE_PASSWORD }}
           FOD_RELEASE: ${{ needs.Prepare.outputs.FOD_RELEASE }}
           FOD_PARENT_RELEASE: ${{ needs.Prepare.outputs.FOD_PARENT_RELEASE }}
