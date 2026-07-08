@@ -48,11 +48,11 @@ formatters:
     source:
       name: "${vulnDetail.source!=null && vulnDetail.source.longName!=null ? vulnDetail.source.longName : 'Vulnerability Link'}"
       url: "${vulnDetail.vulnerabilityLink}"
-  refFromBuildReport:
+  refFromLifecycleCve:
     id: "${vuln.id}"
     source:
-      name: "Sonatype Build Report"
-      url: "${buildReportUrl}"
+      name: "Sonatype Lifecycle"
+      url: "${#replaceAllFromRegExMap(cli['sonatype-url'], {'/+$':''})+'/assets/index.html#/vulnerabilities/'+vuln.id}"
   ratingFromMainSeverity:
     source:
       name: "${vulnDetail.mainSeverity.sourceLabel!=null ? vulnDetail.mainSeverity.sourceLabel : vulnDetail.mainSeverity.source}"
@@ -160,10 +160,6 @@ steps:
   - if: "${cli['enrich'] && sbom_raw.dependencies!=null}"
     var.set:
       rootRef: "${sbom_raw.metadata!=null && sbom_raw.metadata.component!=null ? sbom_raw.metadata.component['bom-ref'] : null}"
-
-  # Capture Sonatype build report URL from BOM-level external references (if available)
-  - var.set:
-      buildReportUrl: "${sbom_raw.externalReferences!=null ? #replaceAllFromRegExMap(#fmt('%s',sbom_raw.externalReferences), {'.*\"url\"\\s*:\\s*\"([^\"]+)\".*':'$1'}) : null}"
 
   - if: "${cli['enrich'] && sbom_raw.dependencies!=null}"
     records.for-each:
@@ -328,13 +324,6 @@ steps:
               on.fail:
                 - log.warn: "CVE detail lookup skipped for ${vuln.id}: ${lastException.message}"
 
-        # Always append Sonatype build report URL so FoD issue references can link back to the scan report,
-        # even if the vulnerability detail lookup fails.
-        - if: "${buildReportUrl!=null && buildReportUrl.startsWith('http')}"
-          var.set:
-            vuln.references..:
-              fmt: refFromBuildReport
-
         # Set recommendation field on vulnerability
         - if: "${recText != null}"
           var.set:
@@ -364,7 +353,7 @@ steps:
 
   # Step 5: Write SBOM file (in-place mutations are reflected in sbom_raw)
   - out.write:
-      "${cli['sbom-file']}": "${#fmt('%s', sbom_raw)}"
+      "${cli['sbom-file']}": "${#replaceAllFromRegExMap(#fmt('%s', sbom_raw), {'https://links\\.sonatype\\.com/products/clm/vulnerability/([A-Za-z0-9-]+)': #replaceAllFromRegExMap(cli['sonatype-url'], {'/+$':''})+'/assets/index.html#/vulnerabilities/$1', 'Sonatype Guide': 'Sonatype Lifecycle'})}"
 
   - log.info: Wrote CycloneDX SBOM to ${cli['sbom-file']} for stage ${cli['sonatype-stage']}
 
