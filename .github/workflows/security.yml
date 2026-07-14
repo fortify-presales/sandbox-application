@@ -23,6 +23,7 @@ jobs:
       package_extra_opts: -bt none
       do_sca_scan: false
       do_check_policy: true
+      list_source_files: true
     secrets: inherit
 
   sonatype:
